@@ -346,6 +346,16 @@ uint32_t efc_perform_read_sequence(Efc *p_efc, uint32_t ul_cmd_st, uint32_t ul_c
 
 	p_efc->EEFC_FMR &= ~(0x1u << 16);		// re-enable sequential code optimisation (DC: assumed we want it)
 
+#if SAME70
+	// Instructions that the core fetched from flash while it was in read mode are signature data, not code.
+	// Discard them before returning to flash. Written out because SCB_InvalidateICache() is not forced inline.
+	__DSB();
+	__ISB();
+	SCB->ICIALLU = 0UL;
+	__DSB();
+	__ISB();
+#endif
+
 	return EFC_RC_OK;
 }
 
