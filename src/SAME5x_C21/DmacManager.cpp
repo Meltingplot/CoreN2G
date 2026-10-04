@@ -406,12 +406,16 @@ extern "C" void DMAC_Handler() noexcept
 	while (((intPend = DMAC->INTPEND.reg) & (DMAC_INTPEND_SUSP | DMAC_INTPEND_TCMPL | DMAC_INTPEND_TERR)) != 0)
 	{
 		const size_t channel = intPend & DMAC_INTPEND_ID_Msk;
-		DMAC->CHID.reg = channel;
-		__DSB();
-		const uint8_t intflag = DMAC->CHINTFLAG.reg & DMAC->CHINTENSET.reg & (DMAC_CHINTFLAG_SUSP | DMAC_CHINTFLAG_TCMPL | DMAC_CHINTFLAG_TERR);
+		uint8_t intflag;
+		{
+			AtomicCriticalSectionLocker lock;		// a higher priority interrupt that selects another channel (e.g. I2C starting a DMA read) would make us clear that channel's flags instead
+			DMAC->CHID.reg = channel;
+			__DSB();
+			intflag = DMAC->CHINTFLAG.reg & DMAC->CHINTENSET.reg & (DMAC_CHINTFLAG_SUSP | DMAC_CHINTFLAG_TCMPL | DMAC_CHINTFLAG_TERR);
+			DMAC->CHINTFLAG.reg = intflag;
+		}
 		if (intflag != 0)					// should always be true
 		{
-			DMAC->CHINTFLAG.reg = intflag;
 			const DmaCallbackFunction fn = dmaChannelCallbackFunctions[channel];
 			if (fn != nullptr)
 			{
