@@ -339,6 +339,7 @@ bool AdcClass::StartConversion() noexcept
 	DmacManager::SetDataLength(dmaChan, numChannelsConverting);
 
 	dmaFinishedReason = DmaCallbackReason::none;
+	(void)DmacManager::GetAndClearChannelStatus(dmaChan);		// a completion flag left set would fire as soon as we enable the interrupt, and the callback would disable it for this conversion
 	DmacManager::EnableCompletedInterrupt(dmaChan);
 
 	DmacManager::EnableChannel(dmaChan, dmaPrio);
@@ -432,6 +433,7 @@ bool SdAdcClass::StartConversion() noexcept
 	DmacManager::SetDataLength(dmaChan, numChannelsConverting);
 
 	dmaFinishedReason = DmaCallbackReason::none;
+	(void)DmacManager::GetAndClearChannelStatus(dmaChan);		// a completion flag left set would fire as soon as we enable the interrupt, and the callback would disable it for this conversion
 	DmacManager::EnableCompletedInterrupt(dmaChan);
 
 	DmacManager::EnableChannel(dmaChan, dmaPrio);
