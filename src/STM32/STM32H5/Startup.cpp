@@ -41,8 +41,7 @@ static_assert(__FPU_PRESENT == 1 && __FPU_USED == 1);
  */
 extern "C" [[noreturn]] void Reset_Handler() noexcept
 {
-	asm("ldr   r0, =sysStackLimit");
-	asm("ldr   r0, [r0]");
+	asm("ldr   r0, =_sstack");				// use the linker symbol, sysStackLimit lives in RAM and is not initialised yet
 	asm("msr   MSPLIM, r0");				// set stack pointer limit
 
 	SystemInit();							// initialise FPU, set vector table address, reset clocks
@@ -203,7 +202,7 @@ void SystemClock_Config(void)
   /** Initializes the RCC Oscillators according to the specified parameters
   * in the RCC_OscInitTypeDef structure.
   */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI48|RCC_OSCILLATORTYPE_LSI | RCC_OSCILLATORTYPE_HSE;
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI48 | RCC_OSCILLATORTYPE_LSI | RCC_OSCILLATORTYPE_HSE;
   RCC_OscInitStruct.HSEState = RCC_HSE_ON;
   RCC_OscInitStruct.LSIState = RCC_LSI_ON;
   RCC_OscInitStruct.HSI48State = RCC_HSI48_ON;
