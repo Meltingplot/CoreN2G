@@ -391,6 +391,9 @@ void Cache::Flush(const volatile void *start, size_t length) noexcept
 			vAssertCalled(__LINE__, __FILE__);
 		}
 	}
+
+	// The buffer is not cached, but the writes to it must have completed before the caller starts the DMA, as on the processors without a cache
+	__DSB();
 }
 
 #endif
