@@ -48,7 +48,7 @@ extern "C" {
     {
     	wdt_restart(WDT);
         size_t pageStartAddr = IFLASH_ADDR + i * IFLASH_PAGE_SIZE;
-        Flash::Unlock(pageStartAddr, pageStartAddr + IFLASH_PAGE_SIZE - 1);
+        Flash::Unlock(pageStartAddr, IFLASH_PAGE_SIZE);
     }
 
     Flash::ClearGpNvm(1);			// tell the system to boot from ROM next time
