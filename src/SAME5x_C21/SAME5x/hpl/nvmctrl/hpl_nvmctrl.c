@@ -621,6 +621,11 @@ static int32_t _user_row_write_exec(const uint32_t *_row)
 	}
 
 	for (i = 0; i < 32; i++) { /* 32 Quad words for User row: 32 * (4 bytes * 4) = 512 bytes */
+		// Suspend interrupts across the page buffer fill and the write command, as _flash_program does: an interrupt landing in the
+		// fill corrupts a word of the user row
+		const uint32_t primask = __get_PRIMASK();
+		__disable_irq();
+
 		/* - Page buffer clear & write. */
 		hri_nvmctrl_write_CTRLB_reg(hw, NVMCTRL_CTRLB_CMD_PBC | NVMCTRL_CTRLB_CMDEX_KEY);
 		while (!hri_nvmctrl_get_STATUS_READY_bit(hw)) {
@@ -634,6 +639,9 @@ static int32_t _user_row_write_exec(const uint32_t *_row)
 		/* - Write AUX row. */
 		hri_nvmctrl_write_ADDR_reg(hw, (hri_nvmctrl_addr_reg_t)(_NVM_USER_ROW_BASE + i * 16));
 		hri_nvmctrl_write_CTRLB_reg(hw, NVMCTRL_CTRLB_CMD_WQW | NVMCTRL_CTRLB_CMDEX_KEY);
+
+		__set_PRIMASK(primask);
+
 		while (!hri_nvmctrl_get_STATUS_READY_bit(hw)) {
 			/* Wait until this module isn't busy */
 		}

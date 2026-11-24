@@ -613,6 +613,11 @@ static int32_t _user_row_write_exec(const uint32_t *_row)
 	// No need to clear the page buffer because we are going to write all of it
 	for (unsigned int pageOffset = 0; pageOffset < NVMCTRL_ROW_SIZE; pageOffset += NVMCTRL_PAGE_SIZE)
 	{
+		// Interrupts must stay off across the page buffer fill and the write command, as in _flash_program, else an interrupt
+		// landing in the fill corrupts a word of the user row
+		const uint32_t primask = __get_PRIMASK();
+		__disable_irq();
+
 		// We must do 32-bit writes to the page buffer, so don't use memcpy here
 		for (unsigned int i = 0; i < NVMCTRL_PAGE_SIZE/4; ++i)
 		{
@@ -622,6 +627,9 @@ static int32_t _user_row_write_exec(const uint32_t *_row)
 		/* - Write AUX row. */
 		hri_nvmctrl_write_ADDR_reg(hw, (hri_nvmctrl_addr_reg_t)((_NVM_USER_ROW_BASE + pageOffset) / 2));
 		hri_nvmctrl_write_CTRLA_reg(hw, NVMCTRL_CTRLA_CMD_WAP | NVMCTRL_CTRLA_CMDEX_KEY);
+
+		__set_PRIMASK(primask);
+
 		while (!hri_nvmctrl_get_INTFLAG_reg(hw, NVMCTRL_INTFLAG_READY)) {
 			/* Wait until this module isn't busy */
 		}
