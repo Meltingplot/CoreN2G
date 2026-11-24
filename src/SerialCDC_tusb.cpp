@@ -28,6 +28,11 @@ extern "C" {
 # include <CoreNotifyIndices.h>
 #endif
 
+#if SAME70
+extern "C" [[noreturn]] void vAssertCalled(uint32_t line, const char *_ecv_array file) noexcept;
+constexpr uint32_t DCacheLineSize = 32;			// the Cortex-M7 data cache line is 8 words
+#endif
+
 // Array of SerialCDC instances for lookup by interface index in callbacks
 static SerialCDC *serialCDCInstances[CFG_TUD_CDC] = { nullptr };
 
@@ -431,8 +436,17 @@ bool SerialCDC::StartDirectRead(uint8_t *buffer, size_t length) noexcept
 		return false;
 	}
 
+#if SAME70
+	// DirectReadXferComplete invalidates the cache lines of the buffer, so the buffer must not share a line with other data
+	if (((reinterpret_cast<uintptr_t>(buffer) | length) & (DCacheLineSize - 1)) != 0)
+	{
+		vAssertCalled(__LINE__, __FILE__);
+	}
+#endif
+
 	rxDone = false;
 	rxBuffer = buffer;
+	rxLength = length;
 	rxPending = true;
 	if (!usbd_edpt_xfer(0, epOut, buffer, (uint16_t)length))
 	{
@@ -500,6 +514,14 @@ bool SerialCDC::DirectReadXferComplete(uint8_t ep_addr, uint32_t xferred_bytes) 
 	}
 
 	(void)usbd_edpt_claim(0, epOut);
+#if SAME70
+	// The device driver cleans and invalidates the buffer before the DMA starts. The processor may still read Normal memory
+	// speculatively and so fill cache lines of the buffer while the DMA writes it, so drop them before the reader is told
+	if ((SCB->CCR & SCB_CCR_DC_Msk) != 0)
+	{
+		SCB_InvalidateDCache_by_Addr(reinterpret_cast<uint32_t *>(const_cast<uint8_t *>(rxBuffer)), (int32_t)rxLength);
+	}
+#endif
 	rxBytes = xferred_bytes;
 	rxPending = false;
 	rxDone = true;

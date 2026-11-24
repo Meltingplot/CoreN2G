@@ -53,7 +53,7 @@ public:
 	// Non-blocking zero-copy receive, for a task that must not wait. Data received before the endpoint was taken stays in the CDC FIFO
 	bool TakeReceiveEndpoint() noexcept;	// Take the OUT endpoint from the CDC stream, possible once a full FIFO has stopped the stream
 	bool IsReceiveEndpointTaken() const noexcept { return rxTaken; }
-	bool StartDirectRead(uint8_t *buffer, size_t length) noexcept;	// Start receiving, length must be a multiple of the packet size
+	bool StartDirectRead(uint8_t *buffer, size_t length) noexcept;	// Start receiving, length must be a multiple of the packet size, and on the SAME70 buffer and length of the cache line size
 	bool IsDirectReadPending() const noexcept { return rxPending; }
 	bool GetDirectReadProgress(size_t& bytesReceived) const noexcept;	// Get how much the pending read has received so far, false if that cannot be told
 	bool IsDirectReadComplete(size_t& bytesRead) noexcept;	// Return true once when a read has ended, on a short packet or with the buffer full
@@ -80,6 +80,7 @@ private:
 	volatile uint32_t directXferredBytes = 0;
 	volatile uint32_t rxBytes = 0;
 	const uint8_t *rxBuffer = nullptr;
+	size_t rxLength = 0;
 	volatile bool rxTaken = false;	// the OUT endpoint is ours, the tud_cdc_xfer_cb hook keeps its completions away from the CDC stream
 	volatile bool rxPending = false;
 	volatile bool rxDone = false;
