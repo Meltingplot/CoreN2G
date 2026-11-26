@@ -61,6 +61,8 @@ public:
 	virtual void ExecuteCallbacks() noexcept = 0;
 
 	bool ConversionDone() noexcept;
+	bool IsConverting() const noexcept { return state == State::converting; }
+	bool AbandonConversionIfTimedOut() noexcept;
 	bool EnableChannel(unsigned int chan, AnalogInCallbackFunction fn, CallbackParameter param, uint32_t p_ticksPerCall) noexcept;
 	void DisableChannel(unsigned int chan) noexcept;
 	bool SetCallback(unsigned int chan, AnalogInCallbackFunction fn, CallbackParameter param, uint32_t p_ticksPerCall) noexcept;
@@ -74,6 +76,7 @@ public:
 
 protected:
 	virtual bool InternalEnableChannel(unsigned int chan, AnalogInCallbackFunction fn, CallbackParameter param, uint32_t p_ticksPerCall) noexcept = 0;
+	virtual void ReInit() noexcept = 0;
 
 	static void DmaCompleteCallback(CallbackParameter cp, DmaCallbackReason reason) noexcept;
 
@@ -193,6 +196,21 @@ bool AdcBase::ConversionDone() noexcept
 	return false;
 }
 
+// If the conversion has taken too long, stop it and return true
+bool AdcBase::AbandonConversionIfTimedOut() noexcept
+{
+	if (millis() - whenLastConversionStarted < AdcConversionTimeout)
+	{
+		return false;
+	}
+
+	++conversionTimeouts;
+	DmacManager::DisableChannel(dmaChan);
+	ReInit();
+	state = State::idle;
+	return true;
+}
+
 
 class AdcClass : public AdcBase
 {
@@ -204,7 +222,7 @@ public:
 
 protected:
 	bool InternalEnableChannel(unsigned int chan, AnalogInCallbackFunction fn, CallbackParameter param, uint32_t p_ticksPerCall) noexcept override;
-	void ReInit() noexcept;
+	void ReInit() noexcept override;
 
 private:
 	Adc * const device;
@@ -315,23 +333,13 @@ bool AdcClass::InternalEnableChannel(unsigned int chan, AnalogInCallbackFunction
 	return false;
 }
 
-// Start a conversion if we are not already doing one and have channels to convert, or timeout an existing conversion
+// Start a conversion if we have channels to convert. The task loop calls this only when no ADC is converting.
 bool AdcClass::StartConversion() noexcept
 {
 	const size_t numChannelsConverting = numChannelsEnabled;			// capture volatile variable to ensure we use a consistent value
 	if (numChannelsConverting == 0)
 	{
 		return false;
-	}
-
-	if (state == State::converting)
-	{
-		if (millis() - whenLastConversionStarted < AdcConversionTimeout)
-		{
-			return false;
-		}
-		++conversionTimeouts;
-		ReInit();
 	}
 
 	taskToWake = TaskBase::GetCallerTaskHandle();
@@ -399,7 +407,7 @@ public:
 
 protected:
 	bool InternalEnableChannel(unsigned int chan, AnalogInCallbackFunction fn, CallbackParameter param, uint32_t p_ticksPerCall) noexcept override;
-	void ReInit() noexcept;
+	void ReInit() noexcept override;
 
 private:
 	static constexpr size_t NumSdAdcChannels = 2;
@@ -413,23 +421,13 @@ SdAdcClass::SdAdcClass(
 {
 }
 
-// Start a conversion if we are not already doing one and have channels to convert, or timeout an existing conversion
+// Start a conversion if we have channels to convert. The task loop calls this only when no ADC is converting.
 bool SdAdcClass::StartConversion() noexcept
 {
 	const size_t numChannelsConverting = numChannelsEnabled;			// capture volatile variable to ensure we use a consistent value
 	if (numChannelsConverting == 0)
 	{
 		return false;
-	}
-
-	if (state == State::converting)
-	{
-		if (millis() - whenLastConversionStarted < AdcConversionTimeout)
-		{
-			return false;
-		}
-		++conversionTimeouts;
-		ReInit();
 	}
 
 	taskToWake = TaskBase::GetCallerTaskHandle();
@@ -556,22 +554,33 @@ bool SdAdcClass::InternalEnableChannel(unsigned int chan, AnalogInCallbackFuncti
 static AdcBase *adcs[1 + SUPPORT_SDADC];
 
 // Main loop executed by the AIN task
+// The ADC and the SDADC take turns, so only one of them converts at a time. On the tool boards the SDADC converts the Vref and Vssa
+// inputs, which the ADC converts as well. When both converted at the same time the ADC read Vssa too high and Vref too low,
+// by an amount that depended on the code timing and therefore on the code layout of the build.
 void AnalogIn::TaskLoop(void*) noexcept
 {
-	// Loop taking readings and processing them
+	size_t current = 0;											// the only ADC that may be converting
 	for (;;)
 	{
-		// Loop through ADCs
-		bool conversionStarted = false;
-		for (AdcBase*& adc : adcs)
+		AdcBase * const adc = adcs[current];
+		if (adc->ConversionDone())
 		{
-			if (adc->ConversionDone())
+			adc->ExecuteCallbacks();
+		}
+
+		bool converting = adc->IsConverting() && !adc->AbandonConversionIfTimedOut();
+		if (!converting)
+		{
+			// Start a conversion on the next ADC that has channels to convert, trying this one last
+			for (size_t i = 1; i <= ARRAY_SIZE(adcs); ++i)
 			{
-				adc->ExecuteCallbacks();
-			}
-			if (adc->StartConversion())
-			{
-				conversionStarted = true;
+				const size_t next = (current + i) % ARRAY_SIZE(adcs);
+				if (adcs[next]->StartConversion())
+				{
+					current = next;
+					converting = true;
+					break;
+				}
 			}
 		}
 
@@ -593,13 +602,13 @@ void AnalogIn::TaskLoop(void*) noexcept
 			taskHookFunction();
 		}
 
-		if (conversionStarted)
+		if (converting)
 		{
-			TaskBase::TakeIndexed(NotifyIndices::AnalogIn, 100);
+			TaskBase::TakeIndexed(NotifyIndices::AnalogIn, AdcConversionTimeout);
 		}
 		else
 		{
-			// No ADCs enabled yet, or all converting
+			// No ADCs enabled yet
 			delay(2);
 		}
 	}
