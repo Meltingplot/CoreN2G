@@ -31,6 +31,10 @@ alignas(16) __attribute__((section(".DmaBuffers"))) static DmacDescriptor write_
 static DmaCallbackFunction dmaChannelCallbackFunctions[NumDmaChannelsSupported];
 static CallbackParameter callbackParams[NumDmaChannelsSupported];
 
+#if SAMC21
+static Mutex transferMutex;								// see the comment on GetTransferMutex in DmacManager.h
+#endif
+
 // Initialize the DMA controller
 void DmacManager::Init() noexcept
 {
@@ -82,7 +86,20 @@ void DmacManager::Init() noexcept
 #endif
 
 	DMAC->CTRL.reg |= DMAC_CTRL_DMAENABLE;
+
+#if SAMC21
+	transferMutex.Create("DMA");
+#endif
 }
+
+#if SAMC21
+
+Mutex& DmacManager::GetTransferMutex() noexcept
+{
+	return transferMutex;
+}
+
+#endif
 
 void DmacManager::SetBtctrl(const uint8_t channel, const uint32_t val) noexcept
 {
