@@ -10,6 +10,10 @@
 
 #include <CoreIO.h>
 
+#if SAMC21
+class Mutex;
+#endif
+
 #if SAME5x
 constexpr unsigned int NumDmaChannelsSupported = 15;	// max is 32
 #elif SAMC21
@@ -301,6 +305,15 @@ namespace DmacManager
 	void EnableCompletedInterrupt(DmaChannel channel) noexcept;
 	void DisableCompletedInterrupt(DmaChannel channel) noexcept;
 	uint32_t GetAndClearChannelStatus(DmaChannel channel) noexcept;							// the meaning of the result depends on the processor
+
+#if SAMC21
+	// SAM C20/C21 erratum 1.10.4 (DS80000740): when the triggers of several channels are active at the same time, the DMAC may corrupt the write-back descriptors.
+	// We have seen the write-back descriptor of an ADC channel overwritten with the state of the TMC UART transmit channel, which made the ADC conversion time out.
+	// A task holds this mutex while its channels are enabled, so that the channels of the ADC task and of the TMC task never run at the same time.
+	// Releasing it does not switch to a waiting task of the same priority, which the ADC and TMC tasks of the TOOL1LC are, so a task that releases it
+	// must yield or block before it takes it again.
+	Mutex& GetTransferMutex() noexcept;
+#endif
 }
 
 #endif /* SRC_HARDWARE_DMACMANAGER_H_ */

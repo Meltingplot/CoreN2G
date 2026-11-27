@@ -333,7 +333,7 @@ bool AdcClass::InternalEnableChannel(unsigned int chan, AnalogInCallbackFunction
 	return false;
 }
 
-// Start a conversion if we have channels to convert. The task loop calls this only when no ADC is converting.
+// Start a conversion if we have channels to convert. The task loop calls this only when no ADC is converting, holding the DMA transfer mutex.
 bool AdcClass::StartConversion() noexcept
 {
 	const size_t numChannelsConverting = numChannelsEnabled;			// capture volatile variable to ensure we use a consistent value
@@ -421,7 +421,7 @@ SdAdcClass::SdAdcClass(
 {
 }
 
-// Start a conversion if we have channels to convert. The task loop calls this only when no ADC is converting.
+// Start a conversion if we have channels to convert. The task loop calls this only when no ADC is converting, holding the DMA transfer mutex.
 bool SdAdcClass::StartConversion() noexcept
 {
 	const size_t numChannelsConverting = numChannelsEnabled;			// capture volatile variable to ensure we use a consistent value
@@ -554,33 +554,55 @@ bool SdAdcClass::InternalEnableChannel(unsigned int chan, AnalogInCallbackFuncti
 static AdcBase *adcs[1 + SUPPORT_SDADC];
 
 // Main loop executed by the AIN task
-// The ADC and the SDADC take turns, so only one of them converts at a time. On the tool boards the SDADC converts the Vref and Vssa
-// inputs, which the ADC converts as well. When both converted at the same time the ADC read Vssa too high and Vref too low,
+// Each pass converts one sweep of channels on one of the ADCs, so the ADC and the SDADC take turns. On the tool boards the SDADC converts
+// the Vref and Vssa inputs, which the ADC converts as well. When both converted at the same time the ADC read Vssa too high and Vref too low,
 // by an amount that depended on the code timing and therefore on the code layout of the build.
+// While a sweep is converting we hold the DMA transfer mutex, so that the TMC task does not run DMA transfers at the same time (SAM C20/C21
+// erratum 1.10.4, see DmacManager::GetTransferMutex). The sweeps run back to back; when the TMC task holds the mutex, we wait for it.
+// Releasing the mutex does not switch to a task of our priority that is waiting for it, and the TMC task may have our priority. So we yield
+// after each sweep, else we would take the mutex again before that task could run.
 void AnalogIn::TaskLoop(void*) noexcept
 {
-	size_t current = 0;											// the only ADC that may be converting
+	size_t next = 0;											// the ADC to try first
 	for (;;)
 	{
-		AdcBase * const adc = adcs[current];
-		if (adc->ConversionDone())
+		AdcBase *adc = nullptr;
 		{
-			adc->ExecuteCallbacks();
-		}
+			MutexLocker lock(DmacManager::GetTransferMutex());
 
-		bool converting = adc->IsConverting() && !adc->AbandonConversionIfTimedOut();
-		if (!converting)
-		{
-			// Start a conversion on the next ADC that has channels to convert, trying this one last
-			for (size_t i = 1; i <= ARRAY_SIZE(adcs); ++i)
+			// Start a conversion on the next ADC that has channels to convert
+			for (size_t i = 0; i < ARRAY_SIZE(adcs); ++i)
 			{
-				const size_t next = (current + i) % ARRAY_SIZE(adcs);
-				if (adcs[next]->StartConversion())
+				const size_t candidate = (next + i) % ARRAY_SIZE(adcs);
+				if (adcs[candidate]->StartConversion())
 				{
-					current = next;
-					converting = true;
+					adc = adcs[candidate];
+					next = (candidate + 1) % ARRAY_SIZE(adcs);
 					break;
 				}
+			}
+
+			// Wait until it has finished or timed out
+			if (adc != nullptr)
+			{
+				while (adc->IsConverting() && !adc->AbandonConversionIfTimedOut())
+				{
+					(void)TaskBase::TakeIndexed(NotifyIndices::AnalogIn, AdcConversionTimeout);
+				}
+			}
+		}
+
+		if (adc == nullptr)
+		{
+			// No ADCs enabled yet
+			delay(2);
+		}
+		else
+		{
+			TaskBase::Yield();									// let a task that is waiting for the DMA transfer mutex have it
+			if (adc->ConversionDone())
+			{
+				adc->ExecuteCallbacks();
 			}
 		}
 
@@ -600,16 +622,6 @@ void AnalogIn::TaskLoop(void*) noexcept
 		if (taskHookFunction != nullptr)
 		{
 			taskHookFunction();
-		}
-
-		if (converting)
-		{
-			TaskBase::TakeIndexed(NotifyIndices::AnalogIn, AdcConversionTimeout);
-		}
-		else
-		{
-			// No ADCs enabled yet
-			delay(2);
 		}
 	}
 }
