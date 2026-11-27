@@ -557,15 +557,15 @@ static AdcBase *adcs[1 + SUPPORT_SDADC];
 // Each pass converts one sweep of channels on one of the ADCs, so the ADC and the SDADC take turns. On the tool boards the SDADC converts
 // the Vref and Vssa inputs, which the ADC converts as well. When both converted at the same time the ADC read Vssa too high and Vref too low,
 // by an amount that depended on the code timing and therefore on the code layout of the build.
-// A pass starts at most once per tick, which is as often as the callbacks are called. While a sweep is converting we hold the DMA transfer mutex,
-// so that the TMC task does not run DMA transfers at the same time (SAM C20/C21 erratum 1.10.4, see DmacManager::GetTransferMutex).
+// While a sweep is converting we hold the DMA transfer mutex, so that the TMC task does not run DMA transfers at the same time (SAM C20/C21
+// erratum 1.10.4, see DmacManager::GetTransferMutex). The sweeps run back to back; when the TMC task holds the mutex, we wait for it.
+// Releasing the mutex does not switch to a task of our priority that is waiting for it, and the TMC task may have our priority. So we yield
+// after each sweep, else we would take the mutex again before that task could run.
 void AnalogIn::TaskLoop(void*) noexcept
 {
 	size_t next = 0;											// the ADC to try first
 	for (;;)
 	{
-		delay(1);												// wait for the next tick, which also lets the TMC task take the DMA transfer mutex
-
 		AdcBase *adc = nullptr;
 		{
 			MutexLocker lock(DmacManager::GetTransferMutex());
@@ -592,9 +592,18 @@ void AnalogIn::TaskLoop(void*) noexcept
 			}
 		}
 
-		if (adc != nullptr && adc->ConversionDone())
+		if (adc == nullptr)
 		{
-			adc->ExecuteCallbacks();
+			// No ADCs enabled yet
+			delay(2);
+		}
+		else
+		{
+			TaskBase::Yield();									// let a task that is waiting for the DMA transfer mutex have it
+			if (adc->ConversionDone())
+			{
+				adc->ExecuteCallbacks();
+			}
 		}
 
 		// Do the temperature sensor
